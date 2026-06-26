@@ -29,14 +29,25 @@ setting the secret.**
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
 import os
 import re
-import time
+import struct
 import threading
+import time
 import warnings
-from typing import Callable
+import zlib
+from typing import Any, Callable
+
+from .exceptions import (
+    TempIDExpiredError,
+    TempIDFormatError,
+    TempIDPayloadTooLargeError,
+    TempIDTamperedError,
+)
 
 # ---------------------------------------------------------------------------
 # Module-level configuration
@@ -67,7 +78,9 @@ _UNITS: dict[str, int] = {"s": 1, "m": 60, "h": 3_600, "d": 86_400}
 _TS_MIN = 1_577_836_800
 _TS_MAX = 4_102_444_800
 
-TOKEN_VERSION = "v1"
+TOKEN_VERSION = "V2"
+TOKEN_PREFIX = f"TEMP-{TOKEN_VERSION}"
+_MAX_PAYLOAD_BYTES = 512
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -253,6 +266,158 @@ def _decode(value: str) -> tuple[int, bool]:
         return 0, False
 
 
+def _encrypt_payload(data: bytes) -> bytes:
+    """
+    Encrypt data using a CTR-mode stream cipher with HMAC-SHA256.
+    Returns: 16-byte IV + encrypted data.
+    """
+    iv = os.urandom(16)
+    keystream = bytearray()
+    counter = 0
+    secret = _get_secret()
+    
+    # Generate enough keystream bytes
+    while len(keystream) < len(data):
+        # PRF: HMAC-SHA256(secret, IV + counter)
+        block_input = iv + struct.pack(">I", counter)
+        keystream.extend(hmac.new(secret, block_input, hashlib.sha256).digest())
+        counter += 1
+        
+    encrypted = bytes(a ^ b for a, b in zip(data, keystream))
+    return iv + encrypted
+
+
+def _decrypt_payload(data: bytes) -> bytes:
+    """
+    Decrypt data encrypted by _encrypt_payload.
+    """
+    if len(data) < 16:
+        raise ValueError("Encrypted payload too short (missing IV).")
+    
+    iv = data[:16]
+    encrypted = data[16:]
+    keystream = bytearray()
+    counter = 0
+    secret = _get_secret()
+    
+    while len(keystream) < len(encrypted):
+        block_input = iv + struct.pack(">I", counter)
+        keystream.extend(hmac.new(secret, block_input, hashlib.sha256).digest())
+        counter += 1
+        
+    return bytes(a ^ b for a, b in zip(encrypted, keystream))
+
+
+def _b32_encode_dashed(data: bytes) -> str:
+    """Encode bytes to Base32 and insert dashes every 5 characters for aesthetics."""
+    b32 = base64.b32encode(data).rstrip(b"=").decode("ascii")
+    return "-".join(b32[i : i + 5] for i in range(0, len(b32), 5))
+
+
+def _b32_decode_dashed(s: str) -> bytes:
+    """Remove dashes, restore padding, and decode Base32."""
+    clean = s.replace("-", "")
+    padding = "=" * (-len(clean) % 8)
+    return base64.b32decode(clean + padding)
+
+
+def _encode_v2(expires_at: int, payload: dict[str, Any] | None) -> str:
+    """
+    Encode *expires_at* and *payload* into a v2 token string.
+
+    Format: `TEMP-V2.<header_b32>.<payload_b32>.<signature_b32>`
+    """
+    # Header: version(1 byte, value=2) + timestamp(5 bytes) + nonce(4 bytes) = 10 bytes
+    ts_bytes = struct.pack(">Q", expires_at)[3:]  # Take last 5 bytes of 64-bit int
+    nonce_bytes = os.urandom(4)
+    header_raw = b"\x02" + ts_bytes + nonce_bytes
+    header_b32 = _b32_encode_dashed(header_raw)
+
+    # Payload: json -> zlib -> encrypt -> base32
+    if payload:
+        payload_json = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if len(payload_json) > _MAX_PAYLOAD_BYTES:
+            raise TempIDPayloadTooLargeError(
+                f"Payload exceeds {_MAX_PAYLOAD_BYTES} bytes "
+                f"(current: {len(payload_json)} bytes)."
+            )
+        payload_compressed = zlib.compress(payload_json)
+        payload_encrypted = _encrypt_payload(payload_compressed)
+        payload_b32 = _b32_encode_dashed(payload_encrypted)
+    else:
+        payload_b32 = ""
+
+    # Signature: HMAC-SHA256 over "TEMP-V2.{header_b32}.{payload_b32}" (or without payload)
+    if payload_b32:
+        data = f"{TOKEN_PREFIX}.{header_b32}.{payload_b32}"
+    else:
+        data = f"{TOKEN_PREFIX}.{header_b32}"
+        
+    sig_raw = hmac.new(_get_secret(), data.encode("ascii"), hashlib.sha256).digest()[:12]
+    sig_b32 = _b32_encode_dashed(sig_raw)
+
+    return f"{data}.{sig_b32}"
+
+
+def _decode_v2(value: str) -> tuple[int, dict[str, Any] | None]:
+    """
+    Decode and cryptographically verify a v2 token string.
+
+    Returns:
+        (expires_at, payload_dict_or_none)
+    Raises:
+        TempIDFormatError, TempIDTamperedError
+    """
+    parts = value.split(".")
+    if len(parts) not in (3, 4) or parts[0] != TOKEN_PREFIX:
+        raise TempIDFormatError(f"Invalid {TOKEN_VERSION} token format: {value!r}")
+
+    if len(parts) == 3:
+        header_b32 = parts[1]
+        payload_b32 = ""
+        sig_b32 = parts[2]
+        data = f"{TOKEN_PREFIX}.{header_b32}"
+    else:
+        header_b32 = parts[1]
+        payload_b32 = parts[2]
+        sig_b32 = parts[3]
+        data = f"{TOKEN_PREFIX}.{header_b32}.{payload_b32}"
+
+    # Verify signature first
+    sig_expected_raw = hmac.new(_get_secret(), data.encode("ascii"), hashlib.sha256).digest()[:12]
+    sig_expected_b32 = _b32_encode_dashed(sig_expected_raw)
+
+    if not hmac.compare_digest(sig_b32, sig_expected_b32):
+        raise TempIDTamperedError("Token signature verification failed.")
+
+    # Parse header
+    try:
+        header_raw = _b32_decode_dashed(header_b32)
+        if len(header_raw) != 10 or header_raw[0] != 2:
+            raise TempIDFormatError("Invalid v2 header data.")
+        
+        # Unpack 5-byte timestamp
+        ts_padded = b"\x00\x00\x00" + header_raw[1:6]
+        expires_at = struct.unpack(">Q", ts_padded)[0]
+    except Exception as e:
+        raise TempIDFormatError("Malformed v2 header.") from e
+
+    # Parse payload
+    payload = None
+    if payload_b32:
+        try:
+            payload_raw = _b32_decode_dashed(payload_b32)
+            payload_compressed = _decrypt_payload(payload_raw)
+            payload_json = zlib.decompress(payload_compressed)
+            payload = json.loads(payload_json)
+            if not isinstance(payload, dict):
+                raise TempIDFormatError("Payload must be a JSON object.")
+        except Exception as e:
+            raise TempIDFormatError("Malformed or undecryptable v2 payload.") from e
+
+    return expires_at, payload
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -278,69 +443,75 @@ class TempID:
             do_the_thing()
 
     Attributes:
-        value (str): The uppercase token string.  Safe to store, embed in
-            URLs, and transmit via email or SMS.
+        value (str): The token string.
         expires_at (int): Unix timestamp (seconds since epoch) at which this
             token expires.
+        payload (dict | None): Attached dictionary data, if any.
     """
 
     # __slots__ eliminates the per-instance __dict__, reducing memory usage
     # by ~50 bytes per instance — meaningful when tracking many short-lived
     # tokens in a cache or set.
-    __slots__ = ("value", "expires_at", "_callbacks")
+    __slots__ = ("value", "expires_at", "payload", "_callbacks")
 
-    def __init__(self, value: str, expires_at: int) -> None:
-        self.value:      str                         = value
-        self.expires_at: int                         = expires_at
-        self._callbacks: list[Callable[[], None]]    = []
+    def __init__(
+        self, value: str, expires_at: int, payload: dict[str, Any] | None = None
+    ) -> None:
+        self.value: str = value
+        self.expires_at: int = expires_at
+        self.payload: dict[str, Any] | None = payload
+        self._callbacks: list[Callable[[], None]] = []
 
     # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
 
     @classmethod
-    def new(cls, expires_in: str = "10m") -> "TempID":
+    def new(cls, expires_in: str = "10m", payload: dict[str, Any] | None = None) -> "TempID":
         """
         Create a new :class:`TempID` that expires after *expires_in*.
 
         Args:
             expires_in: Duration string — one of ``"30s"``, ``"10m"``,
                 ``"2h"``, or ``"7d"``.  Defaults to ``"10m"``.
+            payload: Optional JSON-serializable dictionary to embed in the token.
 
         Returns:
             A freshly minted :class:`TempID` instance.
 
         Raises:
             ValueError: if *expires_in* is not a valid duration string.
+            TempIDPayloadTooLargeError: if payload JSON exceeds 512 bytes.
 
         Example::
 
-            tid = TempID.new("15m")
-            print(tid.value)      # "A3F2C1D4-9E7B2F-C8D4E1A2"
+            tid = TempID.new("15m", payload={"user_id": 42})
+            print(tid.value)       # "t2...."
             print(tid.remaining()) # "14m 59s"
         """
         seconds    = _parse_duration(expires_in)
         expires_at = int(time.time()) + seconds
-        return cls(_encode(expires_at), expires_at)
+        value = _encode_v2(expires_at, payload)
+        return cls(value, expires_at, payload)
 
     @classmethod
     def from_string(cls, value: str) -> "TempID":
         """
         Restore a :class:`TempID` from its string representation.
 
-        Accepts both uppercase and lowercase input.  The stored
-        :attr:`value` is always normalised to uppercase.
+        Accepts both v1 and v2 tokens.
 
         Args:
-            value: Token string, e.g. ``"A3F2C1D4-9E7B2F-C8D4E1A2"``.
+            value: Token string.
 
         Returns:
             A :class:`TempID` instance.  Call :meth:`valid` or
             :meth:`expired` to check whether it is still active.
 
         Raises:
-            TypeError:  if *value* is not a :class:`str`.
-            ValueError: if *value* is malformed or has been tampered with.
+            TypeError: if *value* is not a :class:`str`.
+            TempIDFormatError: if the token is malformed.
+            TempIDTamperedError: if the token signature is invalid.
 
         Example::
 
@@ -352,10 +523,45 @@ class TempID:
             raise TypeError(
                 f"TempID.from_string() requires a str, got {type(value).__name__!r}."
             )
+        
+        value = value.strip()
+        
+        if value.startswith(f"{TOKEN_PREFIX}."):
+            expires_at, payload = _decode_v2(value)
+            return cls(value, expires_at, payload)
+        
+        # Fallback to v1 token
         expires_at, ok = _decode(value)
         if not ok:
-            raise ValueError(f"Invalid or tampered TempID: {value!r}.")
-        return cls(value.upper(), expires_at)
+            raise TempIDFormatError(f"Invalid or tampered TempID: {value!r}.")
+        return cls(value.upper(), expires_at, None)
+
+    @classmethod
+    def verify(cls, value: str) -> "TempID" | None:
+        """
+        Safe, one-step token verification.
+        
+        Returns the :class:`TempID` if the token is valid, has not been
+        tampered with, and has not yet expired. Returns ``None`` for any failure
+        (malformed, tampered, or expired).
+        
+        This is the recommended way to consume tokens from untrusted sources
+        (like URLs or API requests) because it collapses all edge cases into
+        a simple ``if`` check.
+
+        Args:
+            value: The token string to verify.
+
+        Returns:
+            A valid, unexpired :class:`TempID` instance, or ``None``.
+        """
+        try:
+            tid = cls.from_string(value)
+            if tid.valid():
+                return tid
+            return None
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # State checks
@@ -467,7 +673,10 @@ class TempID:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, TempID):
             return self.value == other.value
-        return self.value == str(other).upper()
+        other_str = str(other).strip()
+        if self.value.startswith(f"{TOKEN_PREFIX}."):
+            return self.value == other_str
+        return self.value == other_str.upper()
 
     def __hash__(self) -> int:
         return hash(self.value)

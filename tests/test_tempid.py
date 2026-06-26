@@ -19,15 +19,14 @@ def test_expired_on_creation():
     assert TempID.new("10m").expired() is False
 
 
-def test_value_is_uppercase():
+def test_value_is_v2_format():
     tid = TempID.new("10m")
-    assert tid.value == tid.value.upper()
-
+    assert tid.value.startswith("TEMP-V2.")
 
 def test_value_format():
     import re
     tid = TempID.new("10m")
-    assert re.match(r"^[0-9A-F]{8}-[0-9A-F]{6}-[0-9A-F]{8}$", tid.value)
+    assert re.match(r"^TEMP-V2\.[A-Z2-7-]+\.[A-Z2-7-]+$", tid.value)
 
 
 # ── Duration parsing ───────────────────────────────────────────────────────────
@@ -103,14 +102,17 @@ def test_from_string_roundtrip():
     assert restored.value == tid.value
 
 
-def test_from_string_lowercase_accepted():
-    tid = TempID.new("10m")
-    restored = TempID.from_string(tid.value.lower())
+def test_from_string_lowercase_accepted_for_v1():
+    # Only v1 tokens are case-insensitive
+    from tempid.core import _encode
+    v1_token = _encode(int(time.time()) + 600)
+    restored = TempID.from_string(v1_token.lower())
     assert restored.valid()
 
 
 def test_from_string_invalid_raises():
-    with pytest.raises(ValueError):
+    from tempid import TempIDFormatError
+    with pytest.raises(TempIDFormatError):
         TempID.from_string("INVALID-STRING-HERE")
 
 
@@ -129,27 +131,32 @@ def test_from_string_expired_but_parseable():
 # ── Tamper resistance ──────────────────────────────────────────────────────────
 
 def test_tampered_last_char():
+    from tempid import TempIDError
     tid = TempID.new("10m")
     last = tid.value[-1]
     tampered = tid.value[:-1] + ("A" if last != "A" else "B")
-    with pytest.raises(ValueError):
+    with pytest.raises(TempIDError):
         TempID.from_string(tampered)
 
 
 def test_tampered_middle():
+    from tempid import TempIDError
     tid = TempID.new("10m")
     chars = list(tid.value)
-    idx = 5
+    idx = 10
     chars[idx] = "A" if chars[idx] != "A" else "B"
-    with pytest.raises(ValueError):
+    with pytest.raises(TempIDError):
         TempID.from_string("".join(chars))
 
 
 def test_cannot_extend_expiry():
+    from tempid import TempIDError
     tid = TempID.new("1s")
-    # Try creating a longer-lived version with same format
-    fake = "FFFFFFFF-" + tid.value[9:]
-    with pytest.raises(ValueError):
+    parts = tid.value.split(".")
+    # Tamper with the header
+    parts[1] = parts[1][:-1] + ("A" if parts[1][-1] != "A" else "B")
+    fake = ".".join(parts)
+    with pytest.raises(TempIDError):
         TempID.from_string(fake)
 
 
