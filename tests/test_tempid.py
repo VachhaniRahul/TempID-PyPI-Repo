@@ -1,0 +1,243 @@
+import time
+import pytest
+from tempid import TempID
+
+
+# ── Basic ──────────────────────────────────────────────────────────────────────
+
+def test_create_returns_tempid():
+    tid = TempID.new("10m")
+    assert isinstance(tid, TempID)
+    assert tid.value
+
+
+def test_valid_on_creation():
+    assert TempID.new("10m").valid() is True
+
+
+def test_expired_on_creation():
+    assert TempID.new("10m").expired() is False
+
+
+def test_value_is_uppercase():
+    tid = TempID.new("10m")
+    assert tid.value == tid.value.upper()
+
+
+def test_value_format():
+    import re
+    tid = TempID.new("10m")
+    assert re.match(r"^[0-9A-F]{8}-[0-9A-F]{6}-[0-9A-F]{8}$", tid.value)
+
+
+# ── Duration parsing ───────────────────────────────────────────────────────────
+
+def test_seconds():
+    tid = TempID.new("30s")
+    assert tid.valid()
+    assert "s" in tid.remaining()
+
+
+def test_minutes():
+    assert TempID.new("5m").valid()
+
+
+def test_hours():
+    assert TempID.new("2h").valid()
+
+
+def test_days():
+    assert TempID.new("7d").valid()
+
+
+def test_invalid_duration():
+    with pytest.raises(ValueError):
+        TempID.new("10x")
+
+
+def test_invalid_duration_no_unit():
+    with pytest.raises(ValueError):
+        TempID.new("100")
+
+
+# ── Expiry ─────────────────────────────────────────────────────────────────────
+
+def test_expires_correctly():
+    tid = TempID.new("1s")
+    assert tid.valid()
+    time.sleep(2)
+    assert tid.expired()
+    assert not tid.valid()
+
+
+def test_remaining_after_expiry():
+    tid = TempID.new("1s")
+    time.sleep(2)
+    assert tid.remaining() == "expired"
+
+
+def test_remaining_minutes_format():
+    tid = TempID.new("10m")
+    r = tid.remaining()
+    assert "m" in r
+
+
+def test_remaining_hours_format():
+    tid = TempID.new("2h")
+    r = tid.remaining()
+    assert "h" in r
+
+
+def test_remaining_days_format():
+    tid = TempID.new("2d")
+    r = tid.remaining()
+    assert "d" in r
+
+
+# ── from_string ────────────────────────────────────────────────────────────────
+
+def test_from_string_roundtrip():
+    tid = TempID.new("10m")
+    restored = TempID.from_string(tid.value)
+    assert restored.valid()
+    assert restored.value == tid.value
+
+
+def test_from_string_lowercase_accepted():
+    tid = TempID.new("10m")
+    restored = TempID.from_string(tid.value.lower())
+    assert restored.valid()
+
+
+def test_from_string_invalid_raises():
+    with pytest.raises(ValueError):
+        TempID.from_string("INVALID-STRING-HERE")
+
+
+def test_from_string_wrong_type_raises():
+    with pytest.raises(TypeError):
+        TempID.from_string(12345)
+
+
+def test_from_string_expired_but_parseable():
+    tid = TempID.new("1s")
+    time.sleep(2)
+    restored = TempID.from_string(tid.value)
+    assert restored.expired()
+
+
+# ── Tamper resistance ──────────────────────────────────────────────────────────
+
+def test_tampered_last_char():
+    tid = TempID.new("10m")
+    last = tid.value[-1]
+    tampered = tid.value[:-1] + ("A" if last != "A" else "B")
+    with pytest.raises(ValueError):
+        TempID.from_string(tampered)
+
+
+def test_tampered_middle():
+    tid = TempID.new("10m")
+    chars = list(tid.value)
+    idx = 5
+    chars[idx] = "A" if chars[idx] != "A" else "B"
+    with pytest.raises(ValueError):
+        TempID.from_string("".join(chars))
+
+
+def test_cannot_extend_expiry():
+    tid = TempID.new("1s")
+    # Try creating a longer-lived version with same format
+    fake = "FFFFFFFF-" + tid.value[9:]
+    with pytest.raises(ValueError):
+        TempID.from_string(fake)
+
+
+# ── Uniqueness ─────────────────────────────────────────────────────────────────
+
+def test_two_ids_are_different():
+    a = TempID.new("10m")
+    b = TempID.new("10m")
+    assert a.value != b.value
+
+
+def test_hundred_ids_are_unique():
+    ids = {TempID.new("10m").value for _ in range(100)}
+    assert len(ids) == 100
+
+
+# ── Callbacks ──────────────────────────────────────────────────────────────────
+
+def test_on_expire_callback_fires():
+    fired = []
+    tid = TempID.new("1s")
+    tid.on_expire(lambda: fired.append(1))
+    time.sleep(2)
+    tid.valid()
+    assert fired == [1]
+
+
+def test_callback_fires_only_once():
+    fired = []
+    tid = TempID.new("1s")
+    tid.on_expire(lambda: fired.append(1))
+    time.sleep(2)
+    tid.valid()
+    tid.valid()
+    assert len(fired) == 1
+
+
+def test_multiple_callbacks():
+    results = []
+    tid = TempID.new("1s")
+    tid.on_expire(lambda: results.append("a"))
+    tid.on_expire(lambda: results.append("b"))
+    time.sleep(2)
+    tid.valid()
+    assert sorted(results) == ["a", "b"]
+
+
+def test_callback_not_fired_if_still_valid():
+    fired = []
+    tid = TempID.new("10m")
+    tid.on_expire(lambda: fired.append(1))
+    tid.valid()
+    assert fired == []
+
+
+# ── Equality & hashing ─────────────────────────────────────────────────────────
+
+def test_equality_same_value():
+    tid = TempID.new("10m")
+    restored = TempID.from_string(tid.value)
+    assert tid == restored
+
+
+def test_equality_with_string():
+    tid = TempID.new("10m")
+    assert tid == tid.value
+
+
+def test_hashable():
+    tid = TempID.new("10m")
+    s = {tid}
+    assert tid in s
+
+
+# ── Repr & str ─────────────────────────────────────────────────────────────────
+
+def test_str_returns_value():
+    tid = TempID.new("10m")
+    assert str(tid) == tid.value
+
+
+def test_repr_contains_status():
+    tid = TempID.new("10m")
+    assert "valid" in repr(tid)
+
+
+def test_repr_expired():
+    tid = TempID.new("1s")
+    time.sleep(2)
+    tid.valid()
+    assert "expired" in repr(tid)

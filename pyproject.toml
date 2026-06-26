@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tempid"
+version = "1.0.0"
+description = "Unique IDs that automatically expire — like UUID but with a TTL"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+keywords = ["uuid", "id", "token", "expiry", "ttl", "otp", "invite", "link"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/tempid"
+Documentation = "https://github.com/yourusername/tempid#readme"
+Issues = "https://github.com/yourusername/tempid/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tempid*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
