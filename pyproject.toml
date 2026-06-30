@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tempid"
-version = "2.0.0"
+version = "2.0.1"
 description = "Unique IDs that automatically expire — like UUID but with a TTL"
 readme = "README.md"
 license = "MIT"
@@ -35,7 +35,6 @@ classifiers = [
 Homepage      = "https://github.com/VachhaniRahul/TempID-PyPI-Repo"
 Documentation = "https://github.com/VachhaniRahul/TempID-PyPI-Repo#readme"
 Issues        = "https://github.com/VachhaniRahul/TempID-PyPI-Repo/issues"
-Changelog     = "https://github.com/VachhaniRahul/TempID-PyPI-Repo/releases"
 
 [project.optional-dependencies]
 redis    = ["redis>=5.0.0"]
