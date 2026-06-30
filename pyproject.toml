@@ -4,19 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tempid"
-version = "1.0.0"
+version = "2.0.0"
 description = "Unique IDs that automatically expire — like UUID but with a TTL"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
-authors = [{name = "Rahul Vachhani", email = ""}]
+dependencies = [
+    "cryptography>=41.0.0"
+]
+authors = [{name = "Rahul Patel"}]
 keywords = [
     "id","uuid","token", "expiry", "ttl", "jwt", "auth",
     "password-reset", "magic-link", "otp", "invite",
     "signed-url", "temporary"
 ]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -36,8 +38,21 @@ Issues        = "https://github.com/VachhaniRahul/TempID-PyPI-Repo/issues"
 Changelog     = "https://github.com/VachhaniRahul/TempID-PyPI-Repo/releases"
 
 [project.optional-dependencies]
-redis = ["redis>=4.0"]
-dev   = ["pytest>=7", "ruff", "mypy"]
+redis    = ["redis>=5.0.0"]
+mongo    = ["pymongo>=4.0.0"]
+mysql    = ["pymysql>=1.0.0", "dbutils>=3.0.0"]
+postgres = ["psycopg2-binary>=2.9.0"]
+async-redis = ["redis>=5.0.0"]
+async-sqlite = ["aiosqlite>=0.20.0"]
+async-mongo = ["motor>=3.3.0"]
+async-postgres = ["asyncpg>=0.29.0"]
+async-mysql = ["aiomysql>=0.2.0"]
+all      = [
+    "redis>=5.0.0", "pymongo>=4.0.0", "pymysql>=1.0.0", "dbutils>=3.0.0", 
+    "psycopg2-binary>=2.9.0", "aiosqlite>=0.20.0", "motor>=3.3.0", 
+    "asyncpg>=0.29.0", "aiomysql>=0.2.0"
+]
+dev      = ["pytest>=7", "pytest-asyncio>=0.23.0", "ruff", "mypy"]
 
 [tool.setuptools.packages.find]
 where   = ["."]
@@ -49,6 +64,8 @@ tempid = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100

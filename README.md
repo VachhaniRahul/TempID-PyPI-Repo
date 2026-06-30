@@ -1,319 +1,312 @@
 # tempid
 
-> Unique IDs that automatically expire — like UUID, but with a TTL.
+> Unique IDs that automatically expire, store encrypted payloads, and strictly limit usages — built for Enterprise Python.
 
-```python
-from tempid import TempID
+`tempid` gives you Stripe-like, highly secure temporary tokens (`TEMP-V2.XXXX...`) without the boilerplate. 
 
-tid = TempID.new("10m", payload={"user_id": 42})
-print(tid.value)       # "TEMP-V2.AIAGU-PSOHJ... (Encrypted!)"
-print(tid.valid())     # True
-print(tid.remaining()) # "9m 58s"
-
-# Safe, stateless verification
-verified = TempID.verify(tid.value)
-if verified:
-    print(verified.payload["user_id"])  # 42
-```
-
-No database. No Redis. No cron jobs. The expiry is **inside the token itself**.
+`tempid` operates as a full **Hybrid Token Engine**. It supports embedded JSON payloads, Strict Use-Count Limits (e.g. "burn after reading"), and high-concurrency Async/Sync database backends.
 
 ---
 
-## Install
+## ⚡ Features at a Glance
+- **Stateless by Default:** Tokens hold their own expiration time. No database required for basic time-based expiry.
+- **Encrypted Payloads:** Embed JSON data directly inside the token (up to 512 bytes). Fully encrypted, users cannot read or tamper with it.
+- **Strict Use Limits:** Set a `max_uses` limit on tokens (e.g., a one-time-use OTP).
+- **Enterprise DB Backends:** Built-in connection pooling for Redis, PostgreSQL, MySQL, SQLite, and MongoDB.
+- **Hybrid Async Engine:** First-class `async/await` support for FastAPI, Sanic, and Starlette via dedicated `AsyncBackends`.
+- **Zero Dependencies (Core):** The core engine uses only standard Python libraries.
+
+---
+
+## 📦 Installation
 
 ```bash
 pip install tempid
 ```
 
+If you plan to use database backends for strict usage limits (`max_uses`), install the appropriate driver:
+```bash
+pip install tempid[redis]          # For RedisBackend
+pip install tempid[mysql]          # For MySQLBackend
+pip install tempid[postgres]       # For PostgreSQLBackend
+pip install tempid[mongo]          # For MongoBackend
+pip install tempid[async-postgres] # For AsyncPostgreSQLBackend
+pip install tempid[async-mysql]    # For AsyncMySQLBackend
+pip install tempid[async-mongo]    # For AsyncMongoBackend
+pip install tempid[all]            # Install all drivers
+```
+
 ---
 
-## The Problem It Solves
+## 🚀 Quick Start (Stateless Mode)
 
-Every app needs temporary tokens — password resets, invite links, OTPs, game room codes. The usual approach:
-
-```
-Generate token → Store in DB with expiry → Check DB on each request → Cleanup expired rows
-```
-
-This is boilerplate. `tempid` embeds the expiry **inside the ID itself**, so you need none of that.
-
----
-
-## Quick Start
+By default, `tempid` operates completely offline without needing a database. Expiration is cryptographically signed into the token itself.
 
 ```python
 from tempid import TempID
 
-# Create an ID that expires in 15 minutes
+# 1. Create a token that expires in 15 minutes
 tid = TempID.new("15m")
+print(tid.value)  # TEMP-V2.AIAGU-PSOHJ...
 
-# Check validity
-tid.valid()      # True
-tid.expired()    # False
-tid.remaining()  # "14m 59s"
+# 2. Check time remaining
+print(tid.remaining())  # "14m 59s"
 
-# Restore from string (works across server restarts, different machines)
-restored = TempID.from_string(tid.value)
-restored.valid()  # True (if not expired)
-
-# Register a callback when it expires
-tid.on_expire(lambda: print("Token expired!"))
+# 3. Verify securely (e.g., when a user submits it)
+# verify() returns the TempID object if valid, or None if expired/tampered
+verified = TempID.verify(tid.value)
+if verified:
+    print("Token is valid!")
+else:
+    print("Token is invalid or expired.")
 ```
 
 ---
 
-## Supported Duration Formats
+## 🧳 Encrypted Payloads
 
-| Format  | Meaning    |
-|---------|------------|
-| `"30s"` | 30 seconds |
-| `"10m"` | 10 minutes |
-| `"2h"`  | 2 hours    |
-| `"7d"`  | 7 days     |
+You can embed JSON-serializable dictionaries directly into the token. The data is heavily compressed (zlib) and **fully encrypted** (AES-like CTR mode). Users cannot read or tamper with it.
+
+```python
+# Create a token with a payload
+tid = TempID.new("2h", payload={"user_id": 42, "role": "admin"})
+
+# Later, verify and extract the data
+verified_token = TempID.verify(tid.value)
+
+if verified_token:
+    print(verified_token.payload["user_id"])  # 42
+    print(verified_token.payload["role"])     # "admin"
+```
+*Note: Maximum payload size after compression is 512 bytes. If exceeded, `TempIDPayloadTooLargeError` is raised.*
 
 ---
 
-## Real World Examples
+## 🛡️ Strict Use Limits (`max_uses`)
 
-### Password Reset Link
+Need a token that can only be used exactly 3 times, or a password reset link that burns after 1 use? You can set `max_uses`.
 
+To use this feature, you **must** configure a database backend at application startup so `tempid` can track the usage atomically across your servers.
+
+### 1. Configure a Backend (Startup)
 ```python
-from tempid import TempID
+from tempid import configure
+from tempid.backends import RedisBackend
 
-# User clicks "Forgot Password"
-tid = TempID.new("15m")
-reset_link = f"https://myapp.com/reset?token={tid.value}"
-send_email(user.email, reset_link)
+# Run this ONCE when your app starts
+configure(store=RedisBackend("redis://localhost:6379/0"))
+```
 
-# When user opens the link
-token = request.args.get("token")
-try:
-    tid = TempID.from_string(token)
-    if tid.valid():
-        show_reset_form()
+### 2. Generate a Limited Token
+```python
+# Expires in 1 hour, OR after 1 successful use
+tid = TempID.new("1h", max_uses=1)
+```
+
+### 3. Consume the Token
+```python
+# check_uses=True checks the database limit WITHOUT consuming a use
+verified = TempID.verify(token_str, check_uses=True)
+
+if verified:
+    # use() attempts to consume 1 use atomically in the database
+    if verified.use():
+        print("Success! Action performed.")
     else:
-        show_error("This link has expired. Please request a new one.")
-except ValueError:
-    show_error("Invalid link.")
+        print("Token limit reached (Already used!).")
+```
+
+### 4. Check Remaining Uses
+```python
+info = verified.uses_info()
+print(f"Used: {info['used']} / Total: {info['total']}")
 ```
 
 ---
 
-### Invite Links
+## ⚡ Async Support (FastAPI / Starlette)
+
+`tempid` is fully async-native. If you are building high-concurrency apps, use the `Async` backends and methods to prevent blocking your event loop.
 
 ```python
-# Create a 7-day invite
-invite = TempID.new("7d")
-invite_link = f"https://myapp.com/join?invite={invite.value}"
+import asyncio
+from tempid import TempID, configure
+from tempid.async_backends import AsyncPostgreSQLBackend
 
-# When someone joins
-try:
-    invite = TempID.from_string(request.args["invite"])
-    if invite.valid():
-        create_account(user)
+# 1. Configure the Async Backend
+configure(store=AsyncPostgreSQLBackend("postgresql://root:pass@localhost/mydb"))
+
+async def api_endpoint(token_string: str):
+    # 2. Verify (Checks DB asynchronously without blocking)
+    tid = await TempID.verify_async(token_string, check_uses=True)
+    
+    if not tid:
+        return {"error": "Invalid or exhausted token"}
+        
+    # 3. Consume a use
+    success = await tid.use_async()
+    if success:
+        return {"data": tid.payload}
     else:
-        show_error("Invite link has expired.")
-except ValueError:
-    show_error("Invalid invite link.")
+        return {"error": "Token already used!"}
+        
+    # Check info
+    info = await tid.uses_info_async()
+    print(info)
 ```
 
 ---
 
-### Game Room / Lobby Code
+## 🏭 Supported Backends Reference
 
-```python
-# Create room
-room_code = TempID.new("1h")
-print(f"Share this code: {room_code.value}")
+All backends guarantee **perfect atomicity** (no race conditions or double-spending) even under extreme loads.
 
-# Player tries to join
-try:
-    code = TempID.from_string(user_input)
-    if code.valid():
-        join_room(code.value)
-    else:
-        print("Room has expired.")
-except ValueError:
-    print("Invalid room code.")
-```
+### Synchronous Backends (`tempid.backends`)
+- `MemoryBackend()`: Stores uses in a thread-safe dict. (Development only).
+- `SQLiteBackend(db_path)`: Uses WAL mode and locks. Great for single-server production.
+- `RedisBackend(uri)`: Uses atomic Lua scripts. Ideal for distributed caching.
+- `MongoBackend(uri, db)`: Uses `find_one_and_update` on unique indexes.
+- `MySQLBackend(host, port, user, password, db)`: Connection pooled, uses `SELECT FOR UPDATE`.
+- `PostgreSQLBackend(dsn)`: Connection pooled, uses `ON CONFLICT DO UPDATE`.
 
----
-
-### Expiry Callback
-
-```python
-tid = TempID.new("10m")
-
-# Chain multiple callbacks
-tid.on_expire(lambda: cleanup_session()) \
-   .on_expire(lambda: log("token expired"))
-
-# Callbacks fire exactly once, on the first .valid() call after expiry
-```
+### Asynchronous Backends (`tempid.async_backends`)
+- `AsyncMemoryBackend()`: Thread-safe, asyncio-safe. (Development only).
+- `AsyncSQLiteBackend(db_path)`: Uses `aiosqlite`.
+- `AsyncRedisBackend(uri)`: Uses `redis.asyncio` with Lua scripts.
+- `AsyncMongoBackend(uri, db)`: Uses `motor`.
+- `AsyncMySQLBackend(host, port, user, password, db)`: Uses `aiomysql` pools.
+- `AsyncPostgreSQLBackend(dsn)`: Uses `asyncpg` pools (highest performance).
 
 ---
 
-## Security
+## 🔐 Security & Secrets
 
-### Setting a Secret (Required for Production)
+### The Secret Key (Required)
+`tempid` uses a 96-bit HMAC-SHA256 signature to prevent tampering and encryption. In production, you **must** set an environment variable to share the secret across your instances.
 
-import os
+```bash
+# Set this in your OS, Docker, or .env
+export TEMPID_SECRET="your-super-secret-32-byte-key-here"
+```
 
-# Set this before starting your app
-os.environ["TEMPID_SECRET"] = "your-super-secret-32-byte-key-here"
-
-## Backward Compatibility
-`tempid` v2.0 is fully backward compatible with v1 tokens. If you pass an old `XXXX-XXXX-XXXX` token into `TempID.from_string()`, it will still parse and validate correctly without throwing formatting errors.
-
-If `TEMPID_SECRET` is not set, `tempid` will warn and use an insecure default.  
-**Always set this in production.**
-
-Generate a strong secret:
-
+To generate a highly secure secret, run:
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-### How It Works
-
-A3F2C1D4 - 9E7B2F - C8D4E1A2
-├───────┘   ├────┘   ├───────┘
-encrypted   random   HMAC-SHA256
-timestamp   nonce    signature
-(hidden)    (unique) (tamper-proof)
-## Why `tempid`?
-
-*   **Stateless by Default:** The expiration time is cryptographically signed into the token. You do not need a database to know if a token is expired.
-*   **Encrypted Payloads:** Attach JSON dictionaries to your tokens (up to 512 bytes). They are compressed and fully encrypted using a built-in AES-like stream cipher (CTR mode). Users cannot read or modify their payloads.
-*   **Human-Readable Formats:** Built using dashed Base32 (e.g. `TEMP-V2.XXXX...`) for a premium, Stripe-like developer experience.
-*   **Highly Secure:** Protected by 96-bit HMAC-SHA256 signatures to prevent tampering.
-*   **Zero Dependencies:** Just pure Python standard library.
-
-| Attack | Status |
-|--------|--------|
-| Forge a valid ID without the secret | ✅ Blocked by HMAC |
-| Tamper with expiry time | ✅ Blocked by HMAC |
-| Read the expiry from the ID | ✅ Blocked by XOR encryption |
-| Replay a valid (unexpired) ID | ⚠️ By design — store used IDs in a set/cache if needed |
+### Encryption Engine
+Payloads and timestamps are encrypted using a custom XOR-CTR stream cipher combined with HMAC-SHA256, ensuring no parts of the internal data can be deciphered without the `TEMPID_SECRET`.
 
 ---
 
-### One-Time Use (Optional)
+## 📖 Complete API Reference
 
-`tempid` is stateless by design. For one-time-use tokens (e.g. password reset used only once):
+### `TempID` Core Class
 
-```python
-used_tokens = set()  # use Redis in production
+#### `TempID.new(expires_in: str, payload: dict = None, max_uses: int = 0) -> TempID`
+Creates a new token.
+- `expires_in`: Duration string (e.g. `"30s"`, `"15m"`, `"2h"`, `"7d"`).
+- `payload`: Optional dict. Must be JSON serializable. Max 512 bytes.
+- `max_uses`: Strict use limit. `0` means unlimited.
 
-tid = TempID.from_string(token)
-if tid.valid() and token not in used_tokens:
-    used_tokens.add(token)
-    # ✅ process the request
-```
+#### `TempID.from_string(value: str) -> TempID`
+Parses a token string but **does not verify** uses limit or signature. Used internally or for manual exception handling.
 
----
+#### `TempID.verify(value: str, check_uses: bool = False) -> TempID | None`
+The primary, safe way to verify a token. Returns the `TempID` object if valid, unexpired, and untampered. If `check_uses=True`, it verifies the backend limit without consuming a use. Returns `None` on any failure.
 
-## API Reference
+#### `await TempID.verify_async(value: str, check_uses: bool = False) -> TempID | None`
+The async counterpart for `verify()`.
 
-### `TempID.new(expires_in)`
+#### `tid.use() -> bool`
+Attempts to consume 1 use in the database. Returns `True` if successful, `False` if the limit is reached or the token is expired.
 
-Creates a new TempID.
+#### `await tid.use_async() -> bool`
+The async counterpart for `use()`.
 
-| Parameter    | Type  | Default  | Description                                  |
-|--------------|-------|----------|----------------------------------------------|
-| `expires_in` | `str` | `"10m"`  | Duration: `"30s"`, `"10m"`, `"2h"`, `"7d"` |
+#### `tid.uses_info() -> dict`
+Returns `{"total": max_uses, "used": count, "left": remaining}`.
 
-**Returns:** `TempID`  
-**Raises:** `ValueError` if duration format is invalid
+#### `await tid.uses_info_async() -> dict`
+The async counterpart for `uses_info()`.
 
----
+#### `tid.valid() -> bool`
+Returns `True` if the token's timestamp has not expired. (Does NOT check database limits).
 
-### `TempID.from_string(value)`
-
-Restores a TempID from its string value.
-
-**Returns:** `TempID`  
-**Raises:**
-- `ValueError` — if the ID is invalid or has been tampered with
-- `TypeError` — if value is not a string
-
----
-
-### `tid.valid()` → `bool`
-
-Returns `True` if the ID has not yet expired. Fires `on_expire` callbacks on first call after expiry.
-
----
-
-### `tid.expired()` → `bool`
-
+#### `tid.expired() -> bool`
 Opposite of `valid()`.
 
+#### `tid.remaining() -> str`
+Returns a human-readable string of time left (e.g., `"1h 4m 3s"`, `"expired"`).
+
+#### `tid.on_expire(callback: Callable) -> TempID`
+Registers a function to be called exactly once when the token is first determined to be expired by `valid()`.
+
 ---
 
-### `tid.remaining()` → `str`
+## ⚠️ Exceptions Reference
 
-Human-readable time remaining.
+Located in `tempid.exceptions`.
 
+| Exception | Reason Thrown |
+|-----------|---------------|
+| `TempIDFormatError` | The token string is malformed or invalid base32. |
+| `TempIDTamperedError` | The HMAC signature does not match (someone tried to forge or alter it). |
+| `TempIDExpiredError` | The token's timestamp has passed. |
+| `TempIDPayloadTooLargeError`| Passed payload exceeds 512 compressed bytes. |
+| `TempIDRevokedError` | (Reserved for future manual revocation feature). |
+
+**Example of manual handling:**
 ```python
-tid.remaining()  # "9m 45s", "1h 20m", "6d 23h", "expired"
+from tempid import TempID
+from tempid.exceptions import TempIDFormatError, TempIDTamperedError
+
+try:
+    tid = TempID.from_string(user_input)
+    if tid.valid():
+        print(tid.payload)
+except TempIDTamperedError:
+    print("Someone tried to forge this token!")
+except TempIDFormatError:
+    print("Malformed token.")
 ```
 
 ---
 
-### `tid.on_expire(callback)` → `TempID`
+## 📝 Real World Examples
 
-Register a callback fired once when the ID expires. Returns `self` for chaining.
-
+### Example 1: Password Reset (Stateless + Payload)
 ```python
-tid.on_expire(lambda: cleanup()).on_expire(lambda: log("expired"))
+# User clicks "Forgot Password"
+tid = TempID.new("15m", payload={"email": user.email})
+send_email(user.email, f"https://myapp.com/reset?t={tid.value}")
+
+# When user clicks the link
+verified = TempID.verify(request.args["t"])
+if verified:
+    reset_password(verified.payload["email"], new_password)
+```
+
+### Example 2: One-Time-Password (OTP / Burn-After-Reading)
+```python
+configure(store=RedisBackend("redis://localhost"))
+
+# Create 1-time use OTP
+otp = TempID.new("5m", max_uses=1)
+send_sms(user.phone, otp.value)
+
+# Verify
+verified = TempID.verify(user_input, check_uses=True)
+if verified and verified.use():
+    login_user()
+else:
+    print("Invalid or already used OTP!")
 ```
 
 ---
 
-### `tid.value` → `str`
+## 🤝 Backward Compatibility
+`tempid` is fully backward compatible with legacy v1 tokens (`XXXX-XXXX-XXXX`). Passing a v1 token to `TempID.from_string()` will parse it seamlessly.
 
-The token string. Safe to store, share in URLs, send in emails.
-
----
-
-### `tid.expires_at` → `int`
-
-Unix timestamp (seconds) when the ID expires.
-
----
-
-## Environment Variables
-
-| Variable         | Required             | Description                                                                 |
-|------------------|----------------------|-----------------------------------------------------------------------------|
-| `TEMPID_SECRET`  | **Yes (production)** | Secret key for HMAC signing and timestamp encryption. Must be the same across all instances. |
-
----
-
-## When NOT to Use TempID
-
-- **Auth sessions** — use a proper session library (Flask-Login, Django sessions)
-- **API keys** — use a dedicated API key management system
-- **Payment tokens** — use Stripe / payment provider tokens
-- **High-security auth flows** — use JWT with RS256 or a dedicated auth provider
-
-TempID is designed for **lightweight, developer-friendly temporary identifiers** — not as a full authentication system.
-
----
-
-## Contributing
-
-```bash
-git clone https://github.com/VachhaniRahul/TempID-PyPI-Repo
-cd TempID-PyPI-Repo
-pip install -e ".[dev]"
-pytest
-```
-
----
-
-## License
-
+## 📄 License
 MIT © 2026 Rahul Vachhani
