@@ -5,7 +5,7 @@ Thank you for your interest in contributing!
 ## Getting Started
 
 ```bash
-git clone https://github.com/your-username/tempid.git
+git clone https://github.com/VachhaniRahul/TempID-PyPI-Repo.git
 cd tempid
 python -m venv .venv
 source .venv/bin/activate
