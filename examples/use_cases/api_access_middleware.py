@@ -24,6 +24,7 @@ app = FastAPI(title="API Access Middleware — TempID Demo", lifespan=lifespan)
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
+
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     # Skip middleware for non-protected routes
@@ -34,10 +35,12 @@ async def api_key_middleware(request: Request, call_next):
     if not api_key:
         return JSONResponse({"error": "Missing Authorization header"}, status_code=401)
 
-    verified = await TempID.verify_async(api_key, check_uses=True)
+    # 1. Stateless check: Is the signature valid and has it not expired?
+    verified = await TempID.verify_async(api_key)
     if not verified:
         return JSONResponse({"error": "Invalid or expired API key"}, status_code=401)
 
+    # 2. Stateful check: Increment the usage counter atomically in Redis
     if not await verified.use_async():
         info = verified.uses_info()
         return JSONResponse(
@@ -52,6 +55,7 @@ async def api_key_middleware(request: Request, call_next):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+
 class IssueKeyRequest(BaseModel):
     email: str
     max_requests: int = 1000
@@ -61,7 +65,11 @@ class IssueKeyRequest(BaseModel):
 @app.post("/issue-api-key")
 async def issue_api_key(req: IssueKeyRequest):
     token = TempID.new(req.validity, payload={"email": req.email}, max_uses=req.max_requests)
-    return {"api_key": token.value, "expires_in": token.remaining(), "max_requests": req.max_requests}
+    return {
+        "api_key": token.value,
+        "expires_in": token.remaining(),
+        "max_requests": req.max_requests,
+    }
 
 
 @app.get("/api/users")

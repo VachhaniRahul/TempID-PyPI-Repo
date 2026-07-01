@@ -90,8 +90,9 @@ class AsyncSQLiteBackend:
     async def _setup(self) -> None:
         if self._pool_created:
             return
-            
+
         import aiosqlite
+
         try:
             self._conn = await aiosqlite.connect(self._path, timeout=10)
             await self._conn.execute("PRAGMA journal_mode=WAL")
@@ -114,16 +115,16 @@ class AsyncSQLiteBackend:
         async with self._get_lock():
             await self._setup()
             await self._cleanup()
-            
+
             async with self._conn.execute(
                 "SELECT count FROM tempid_uses WHERE token_id = ?", (token_id,)
             ) as cursor:
                 row = await cursor.fetchone()
-                
+
             current = row[0] if row else 0
             if current >= max_uses:
                 return False
-                
+
             await self._conn.execute(
                 "INSERT INTO tempid_uses (token_id, count, expires_at) VALUES (?, 1, ?) "
                 "ON CONFLICT(token_id) DO UPDATE SET count = count + 1",
@@ -165,8 +166,7 @@ class AsyncRedisBackend:
             import redis.asyncio as redis  # type: ignore
         except ImportError:
             raise ImportError(
-                "AsyncRedisBackend requires redis-py. "
-                "Install with: pip install tempid[async-redis]"
+                "AsyncRedisBackend requires redis-py. Install with: pip install tempid[async-redis]"
             )
         self._pool = redis.from_url(uri, decode_responses=True)
         self.prefix = prefix
@@ -177,11 +177,11 @@ class AsyncRedisBackend:
         key = f"{self.prefix}{token_id}"
         # Lua script handles both INCR and TTL atomically to avoid race conditions
         count = await self._incr_script(keys=[key], args=[max_uses, expires_at])
-        
+
         # Redis Lua script returns 0 if limit exceeded
         if count == 0:
             return False
-            
+
         return True
 
     async def use_count(self, token_id: str) -> int:
@@ -206,8 +206,7 @@ class AsyncMongoBackend:
             from motor.motor_asyncio import AsyncIOMotorClient
         except ImportError:
             raise ImportError(
-                "AsyncMongoBackend requires motor. "
-                "Install with: pip install tempid[async-mongo]"
+                "AsyncMongoBackend requires motor. Install with: pip install tempid[async-mongo]"
             )
         self._client: Any = AsyncIOMotorClient(uri)
         self._col: Any = self._client[db]["uses"]
@@ -226,6 +225,7 @@ class AsyncMongoBackend:
 
     async def increment_use(self, token_id: str, max_uses: int, expires_at: int = 0) -> bool:
         from pymongo.errors import DuplicateKeyError
+
         await self._setup()
         try:
             await self._col.insert_one({"token_id": token_id, "count": 1, "expires_at": expires_at})
@@ -276,6 +276,7 @@ class AsyncPostgreSQLBackend:
 
     async def _get_pool(self):
         import asyncpg
+
         if self._pool is None:
             async with self._setup_lock:
                 if self._pool is None:
@@ -309,7 +310,9 @@ class AsyncPostgreSQLBackend:
                     WHERE tempid_uses.count < $3
                     RETURNING count
                     """,
-                    token_id, expires_at, max_uses
+                    token_id,
+                    expires_at,
+                    max_uses,
                 )
         return row is not None
 
@@ -343,8 +346,7 @@ class AsyncMySQLBackend:
             import aiomysql  # type: ignore # noqa: F401
         except ImportError:
             raise ImportError(
-                "AsyncMySQLBackend requires aiomysql. "
-                "Install with: pip install tempid[async-mysql]"
+                "AsyncMySQLBackend requires aiomysql. Install with: pip install tempid[async-mysql]"
             )
         self.host = host
         self.port = port
@@ -357,6 +359,7 @@ class AsyncMySQLBackend:
 
     async def _get_pool(self):
         import aiomysql
+
         if self._pool is None:
             async with self._setup_lock:
                 if self._pool is None:
@@ -392,15 +395,14 @@ class AsyncMySQLBackend:
             try:
                 async with conn.cursor() as cur:
                     await cur.execute(
-                        "SELECT count FROM tempid_uses WHERE token_id = %s FOR UPDATE",
-                        (token_id,)
+                        "SELECT count FROM tempid_uses WHERE token_id = %s FOR UPDATE", (token_id,)
                     )
                     row = await cur.fetchone()
-                    
+
                     if row and row[0] >= max_uses:
                         await conn.rollback()
                         return False
-                        
+
                     await cur.execute(
                         "INSERT INTO tempid_uses (token_id, count, expires_at) VALUES (%s, 1, %s) "
                         "ON DUPLICATE KEY UPDATE count = count + 1",
@@ -416,9 +418,7 @@ class AsyncMySQLBackend:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(
-                    "SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,)
-                )
+                await cur.execute("SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,))
                 row = await cur.fetchone()
         return row[0] if row else 0
 

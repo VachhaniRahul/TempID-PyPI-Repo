@@ -6,4 +6,4 @@ print(token.value)
 verified = TempID.verify(token.value)
 if verified:
     print(verified.payload["user_id"])  # 42
-    print(verified.payload["email"])    # hello@example.com
+    print(verified.payload["email"])  # hello@example.com
