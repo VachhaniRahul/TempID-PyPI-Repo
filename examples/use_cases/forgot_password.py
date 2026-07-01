@@ -28,7 +28,11 @@ async def forgot_password(req: ForgotPasswordRequest):
     # Replace with your actual email sender (SendGrid, SES, SMTP, etc.)
     # await send_email(req.email, reset_link)
 
-    return {"message": f"Reset link sent to {req.email}", "expires_in": token.remaining(), "_debug_link": reset_link}
+    return {
+        "message": f"Reset link sent to {req.email}",
+        "expires_in": token.remaining(),
+        "_debug_link": reset_link,
+    }
 
 
 @app.post("/auth/reset-password")

@@ -8,10 +8,10 @@ print(token.value)
 
 verified = TempID.verify(token.value, check_uses=True)
 if verified:
-    print(verified.use())        # True
-    print(verified.use())        # True
-    print(verified.use())        # True
-    print(verified.use())        # False — limit reached
+    print(verified.use())  # True
+    print(verified.use())  # True
+    print(verified.use())  # True
+    print(verified.use())  # False — limit reached
     print(verified.uses_info())  # {'total': 3, 'used': 3, 'left': 0}
 
 teardown()

@@ -75,23 +75,26 @@ def configure(store: BaseBackend | AsyncBaseBackend) -> None:
         # Also gracefully handles decorators on the increment_use method by checking the underlying backend.
         _backend_is_async = inspect.iscoroutinefunction(getattr(store, "increment_use", None))
 
+
 def teardown() -> None:
     """Close the active sync backend and release connections.
-    
+
     Call this on application shutdown (e.g. FastAPI shutdown event or at the end of a script).
     """
     if _backend is not None and not _backend_is_async:
         if hasattr(_backend, "close"):
             _backend.close()
 
+
 async def teardown_async() -> None:
     """Close the active async backend and release connections.
-    
+
     Call this on application shutdown (e.g. FastAPI shutdown event or at the end of a script).
     """
     if _backend is not None and _backend_is_async:
         if hasattr(_backend, "aclose"):
             await _backend.aclose()
+
 
 # ---------------------------------------------------------------------------
 # Module-level configuration
@@ -127,7 +130,7 @@ _MAX_PAYLOAD_BYTES = 512
 def _warn_once() -> None:
     """Emit the insecure-secret warning exactly once, thread-safely."""
     global _warn_issued
-    if _warn_issued:          # Fast path — avoids lock acquisition in steady state.
+    if _warn_issued:  # Fast path — avoids lock acquisition in steady state.
         return
     with _warn_lock:
         if not _warn_issued:  # Re-check inside the lock (classic DCLP).
@@ -135,9 +138,9 @@ def _warn_once() -> None:
                 "\n[tempid] TEMPID_SECRET is not set.\n"
                 "Anyone who knows the insecure default can forge valid TempIDs.\n"
                 "Generate and export a secret before going to production:\n"
-                '"$(python -c \'import secrets; print(secrets.token_hex(32))\')"',
+                "\"$(python -c 'import secrets; print(secrets.token_hex(32))')\"",
                 UserWarning,
-                stacklevel=2,   # Points to _get_secret() — the nearest useful frame.
+                stacklevel=2,  # Points to _get_secret() — the nearest useful frame.
             )
             _warn_issued = True
 
@@ -170,8 +173,7 @@ def _parse_duration(duration: str) -> int:
     match = _DURATION_RE.fullmatch(duration.strip().lower())
     if not match:
         raise ValueError(
-            f"Invalid duration {duration!r}. "
-            "Expected format: '30s', '10m', '2h', '7d'."
+            f"Invalid duration {duration!r}. Expected format: '30s', '10m', '2h', '7d'."
         )
     return int(match.group(1)) * _UNITS[match.group(2)]
 
@@ -184,11 +186,11 @@ _derived_key_lock = threading.Lock()
 def _derive_payload_key() -> bytes:
     global _derived_cache
     current_secret = _get_secret()
-    
+
     cache = _derived_cache
     if cache is not None and cache[0] == current_secret:
         return cache[1]
-        
+
     with _derived_key_lock:
         cache = _derived_cache
         if cache is None or cache[0] != current_secret:
@@ -212,7 +214,7 @@ def _encrypt_payload(data: bytes) -> bytes:
 def _decrypt_payload(data: bytes) -> bytes:
     if len(data) < 12:
         raise ValueError("Encrypted payload too short (missing nonce).")
-    
+
     key = _derive_payload_key()
     nonce = data[:12]
     encrypted = data[12:]
@@ -241,8 +243,8 @@ def _encode_v2(expires_at: int, payload_bytes: bytes | None, max_uses: int = 0) 
     max_uses=0 means unlimited.
     """
     # Header: 1 + 5 + 4 + 1 = 11 bytes
-    ts_bytes = struct.pack(">Q", expires_at)[3:]          # 5 bytes
-    nonce_bytes = os.urandom(4)                            # 4 bytes
+    ts_bytes = struct.pack(">Q", expires_at)[3:]  # 5 bytes
+    nonce_bytes = os.urandom(4)  # 4 bytes
     max_uses_byte = struct.pack("B", min(max_uses, 255))  # 1 byte; 0 = unlimited
     header_raw = b"\x02" + ts_bytes + nonce_bytes + max_uses_byte
     header_b32 = _b32_encode_dashed(header_raw)
@@ -251,8 +253,7 @@ def _encode_v2(expires_at: int, payload_bytes: bytes | None, max_uses: int = 0) 
     if payload_bytes is not None:
         if len(payload_bytes) > _MAX_PAYLOAD_BYTES:
             raise TempIDPayloadTooLargeError(
-                f"Payload exceeds {_MAX_PAYLOAD_BYTES} bytes "
-                f"(current: {len(payload_bytes)} bytes)."
+                f"Payload exceeds {_MAX_PAYLOAD_BYTES} bytes (current: {len(payload_bytes)} bytes)."
             )
         payload_compressed = zlib.compress(payload_bytes)
         payload_encrypted = _encrypt_payload(payload_compressed)
@@ -265,7 +266,7 @@ def _encode_v2(expires_at: int, payload_bytes: bytes | None, max_uses: int = 0) 
         data = f"{TOKEN_PREFIX}.{header_b32}.{payload_b32}"
     else:
         data = f"{TOKEN_PREFIX}.{header_b32}"
-        
+
     sig_raw = hmac.digest(_get_secret(), data.encode("ascii"), "sha256")[:12]
     sig_b32 = _b32_encode_dashed(sig_raw)
 
@@ -332,7 +333,14 @@ def _decode_v2(value: str) -> tuple[int, dict[str, Any] | None, int]:
                 raise TempIDFormatError("Payload must be a JSON object.")
         except TempIDFormatError:
             raise
-        except (ValueError, binascii.Error, zlib.error, json.JSONDecodeError, UnicodeDecodeError, InvalidTag) as e:
+        except (
+            ValueError,
+            binascii.Error,
+            zlib.error,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            InvalidTag,
+        ) as e:
             raise TempIDTamperedError("Payload decryption failed - possibly tampered.") from e
 
     return expires_at, payload, max_uses
@@ -375,7 +383,10 @@ class TempID:
     __slots__ = ("value", "expires_at", "payload", "max_uses", "_callbacks")
 
     def __init__(
-        self, value: str, expires_at: int, payload: dict[str, Any] | None = None,
+        self,
+        value: str,
+        expires_at: int,
+        payload: dict[str, Any] | None = None,
         max_uses: int = 0,
     ) -> None:
         self.value: str = value
@@ -459,31 +470,29 @@ class TempID:
                 process(tid)
         """
         if not isinstance(value, str):
-            raise TypeError(
-                f"TempID.from_string() requires a str, got {type(value).__name__!r}."
-            )
-        
+            raise TypeError(f"TempID.from_string() requires a str, got {type(value).__name__!r}.")
+
         value = value.strip()
-        
+
         if value.startswith(f"{TOKEN_PREFIX}."):
             expires_at, payload, max_uses = _decode_v2(value)
             return cls(value, expires_at, payload, max_uses)
-        
+
         raise TempIDFormatError(f"Invalid {TOKEN_VERSION} token format: {value!r}")
 
     @classmethod
     def verify(cls, value: str, check_uses: bool = False) -> "TempID" | None:
         """
         Safe, one-step token verification.
-        
+
         Returns the :class:`TempID` if the token is valid, has not been
         tampered with, and has not yet expired. Returns ``None`` for any failure
         (malformed, tampered, or expired).
-        
-        If ``check_uses=True``, this will also check the database to ensure the 
-        token's ``max_uses`` limit has not been exhausted. It does NOT consume 
+
+        If ``check_uses=True``, this will also check the database to ensure the
+        token's ``max_uses`` limit has not been exhausted. It does NOT consume
         a use.
-        
+
         This is safe from DB-DDoS attacks because it performs the offline
         cryptographic checks *before* ever touching the database.
 
@@ -498,12 +507,12 @@ class TempID:
             tid = cls.from_string(value)
             if not tid.valid():
                 return None
-            
+
             if check_uses and tid.max_uses > 0:
                 info = tid.uses_info()
                 if info["left"] == 0:
                     return None
-                    
+
             return tid
         except (TempIDFormatError, TempIDTamperedError, TypeError):
             return None
@@ -512,21 +521,21 @@ class TempID:
     async def verify_async(cls, value: str, check_uses: bool = False) -> "TempID" | None:
         """
         Safe, one-step token verification (Async version).
-        
+
         Like `verify()`, but designed for use with AsyncBaseBackend.
-        
+
         Requires an AsyncBaseBackend to be configured via `configure()`.
         """
         try:
             tid = cls.from_string(value)
             if not tid.valid():
                 return None
-            
+
             if check_uses and tid.max_uses > 0:
                 info = await tid.uses_info_async()
                 if info["left"] == 0:
                     return None
-                    
+
             return tid
         except (TempIDFormatError, TempIDTamperedError, TypeError):
             return None
@@ -558,6 +567,7 @@ class TempID:
             return True  # unlimited — no backend call needed
         token_id = self.value.split(".")[-1]  # signature is the unique token ID
         from typing import cast
+
         sync_backend = cast(BaseBackend, _backend)
         return sync_backend.increment_use(token_id, self.max_uses, self.expires_at)
 
@@ -571,17 +581,21 @@ class TempID:
             return True
         token_id = self.value.split(".")[-1]
         from typing import cast
+
         async_backend = cast(AsyncBaseBackend, _backend)
         return await async_backend.increment_use(token_id, self.max_uses, self.expires_at)
 
     def uses_info(self) -> dict[str, int | None]:
         """Return use-count information in a single backend call."""
         if _backend_is_async:
-            raise RuntimeError("Configured backend is async. Use 'await tid.uses_info_async()' instead.")
+            raise RuntimeError(
+                "Configured backend is async. Use 'await tid.uses_info_async()' instead."
+            )
         if self.max_uses == 0:
             return {"total": None, "used": None, "left": None}
         token_id = self.value.split(".")[-1]
         from typing import cast
+
         sync_backend = cast(BaseBackend, _backend)
         used = sync_backend.use_count(token_id)
         return {
@@ -598,6 +612,7 @@ class TempID:
             return {"total": None, "used": None, "left": None}
         token_id = self.value.split(".")[-1]
         from typing import cast
+
         async_backend = cast(AsyncBaseBackend, _backend)
         used = await async_backend.use_count(token_id)
         return {

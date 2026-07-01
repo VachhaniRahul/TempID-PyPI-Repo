@@ -239,11 +239,13 @@ class MongoBackend:
                 "Install it with: pip install tempid[mongo]"
             )
         from typing import Any
+
         self._col: Any = MongoClient(uri)[db]["uses"]
         self._col.create_index("token_id", unique=True)
 
     def increment_use(self, token_id: str, max_uses: int, expires_at: int = 0) -> bool:
         from pymongo.errors import DuplicateKeyError
+
         try:
             # We assume max_uses >= 1 here. This is safely enforced by TempID.use()
             # which skips the backend entirely if max_uses == 0.
@@ -293,8 +295,7 @@ class MySQLBackend:
             from dbutils.pooled_db import PooledDB
         except ImportError:
             raise ImportError(
-                "MySQLBackend requires pymysql and dbutils. "
-                "Install with: pip install tempid[mysql]"
+                "MySQLBackend requires pymysql and dbutils. Install with: pip install tempid[mysql]"
             )
         self._pool = PooledDB(
             creator=pymysql,
@@ -352,9 +353,7 @@ class MySQLBackend:
         conn = self._pool.connection()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,)
-                )
+                cur.execute("SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,))
                 row = cur.fetchone()
                 return row[0] if row else 0
         finally:
@@ -388,8 +387,7 @@ class PostgreSQLBackend:
             from psycopg2 import pool as pg_pool
         except ImportError:
             raise ImportError(
-                "PostgreSQLBackend requires psycopg2. "
-                "Install with: pip install tempid[postgres]"
+                "PostgreSQLBackend requires psycopg2. Install with: pip install tempid[postgres]"
             )
         self._pool = pg_pool.ThreadedConnectionPool(min_conn, max_conn, dsn=dsn)
         self._setup()
@@ -437,9 +435,7 @@ class PostgreSQLBackend:
         conn = self._pool.getconn()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,)
-                )
+                cur.execute("SELECT count FROM tempid_uses WHERE token_id = %s", (token_id,))
                 row = cur.fetchone()
                 return row[0] if row else 0
         finally:

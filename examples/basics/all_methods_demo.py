@@ -4,11 +4,12 @@ TempID — All Methods Demo
 A quick demonstration of every available method in the TempID core class.
 Run this script to see what each method outputs.
 """
+
 import time
 from tempid import TempID
 
 print("===== 1. Creating a Token =====")
-# TempID.new() creates a token. 
+# TempID.new() creates a token.
 # You can set an expiry ("10s", "5m", "1h") and an optional payload.
 token = TempID.new("15m", payload={"user": "alice"})
 print(f"Token string: {token.value}")
@@ -54,4 +55,4 @@ short_token.on_expire(lambda: print("\n[CALLBACK RUN] This token just died!"))
 
 print("Waiting 2 seconds for the short token to expire...")
 time.sleep(2)
-print(f"Checking valid: {short_token.valid()}") # Triggers the callback above!
+print(f"Checking valid: {short_token.valid()}")  # Triggers the callback above!
