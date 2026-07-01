@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tempid"
 version = "2.0.1"
-description = "Unique IDs that automatically expire — like UUID but with a TTL"
+description = "Unique IDs that automatically expire - like UUID but with a TTL"
 readme = "README.md"
-license = "MIT"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "cryptography>=41.0.0"
@@ -20,6 +20,7 @@ keywords = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
