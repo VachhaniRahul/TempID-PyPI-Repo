@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [2.0.2] — 2026-07-01
+
+### Fixed
+- Replaced `license` string with PEP 621 table syntax in `pyproject.toml` for correct PyPI metadata parsing.
+- Added explicit OSI Approved MIT License classifier for third-party dashboards (e.g., PePy).
+- Replaced em-dash with a standard hyphen in package description to prevent build parsing errors.
+
+### Security / CI
+- Enforced a strict 65% test coverage threshold in GitHub Actions to maintain long-term code quality standards.
+
+---
+
 ## [2.0.1] — 2026-06-30
 
 ### Documentation
